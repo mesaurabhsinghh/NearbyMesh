@@ -8,6 +8,11 @@ import android.bluetooth.le.*
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
+import com.google.gson.Gson
+import com.nearbymesh.app.core.mesh.MeshPacket
+import com.nearbymesh.app.core.mesh.PayloadType
+import com.nearbymesh.app.core.mesh.TextMessagePayload
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +38,29 @@ class BleManager(private val context: Context) {
         private const val TAG = "BleManager"
         val MESH_SERVICE_UUID: UUID = UUID.fromString("0000FE60-0000-1000-8000-00805F9B34FB")
         val PARCEL_SERVICE_UUID = ParcelUuid(MESH_SERVICE_UUID)
+    }
+
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val gson = Gson()
+    var onInstantPacketReceived: ((packet: MeshPacket, rssi: Int) -> Unit)? = null
+
+    private val blastQueue = kotlinx.coroutines.channels.Channel<MeshPacket>(capacity = 64)
+    private val reassemblyCache = Collections.synchronizedMap(object : LinkedHashMap<String, Array<ByteArray?>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Array<ByteArray?>>?): Boolean {
+            return size > 50
+        }
+    })
+
+    init {
+        scope.launch {
+            for (packet in blastQueue) {
+                try {
+                    executeBlast(packet)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Error executing instant blast: ${e.message}")
+                }
+            }
+        }
     }
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -95,10 +123,10 @@ class BleManager(private val context: Context) {
                 return
             }
 
-            // Balanced + Medium Tx Power: Supported on 100% of Android BLE hardware
+            // High Tx Power + Balanced Mode: Delivers maximum range across all Android hardware
             val settings = AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .setConnectable(true)
                 .setTimeout(0)
                 .build()
@@ -203,6 +231,29 @@ class BleManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun handleScanResult(result: ScanResult) {
         val record = result.scanRecord ?: return
+
+        // 0. Connectionless Instant BLE Blaster Packet Check (Magic Byte 0x9B)
+        val mfgData = record.getManufacturerSpecificData(0xFE60)
+        if (mfgData != null && mfgData.isNotEmpty() && mfgData[0] == 0x9B.toByte()) {
+            handleInstantBlastData(mfgData, result.rssi)
+            return
+        }
+
+        // Also check raw bytes for Instant Blaster (0x60, 0xFE, 0x9B)
+        val rawBytes = record.bytes
+        if (rawBytes != null && rawBytes.isNotEmpty()) {
+            for (idx in 0 until rawBytes.size - 2) {
+                val b0 = rawBytes[idx].toInt() and 0xFF
+                val b1 = rawBytes[idx + 1].toInt() and 0xFF
+                val b2 = rawBytes[idx + 2].toInt() and 0xFF
+                if (b0 == 0x60 && b1 == 0xFE && b2 == 0x9B) {
+                    val slice = rawBytes.sliceArray((idx + 2) until rawBytes.size)
+                    handleInstantBlastData(slice, result.rssi)
+                    return
+                }
+            }
+        }
+
         val serviceUuids = record.serviceUuids
 
         // 1. Service UUID Check (Full UUID or 16-bit FE60)
@@ -215,13 +266,11 @@ class BleManager(private val context: Context) {
         val serviceData = record.getServiceData(PARCEL_SERVICE_UUID)
 
         // 3. Manufacturer Data Check (0xFE60)
-        val mfgData = record.getManufacturerSpecificData(0xFE60)
 
         // 4. Raw Bytes Signature Scan (0x60, 0xFE anywhere in packet)
         var foundInRawBytes = false
         var rawDiscoveredNodeId: String? = null
         var rawBattery = -1
-        val rawBytes = record.bytes
         if (rawBytes != null && rawBytes.isNotEmpty()) {
             for (idx in 0 until rawBytes.size - 1) {
                 val b0 = rawBytes[idx].toInt() and 0xFF
@@ -333,5 +382,220 @@ class BleManager(private val context: Context) {
     fun stop() {
         stopAdvertising()
         stopScanning()
+    }
+
+    // =========================================================================
+    // CONNECTIONLESS INSTANT BLE BLASTER (<50ms High-Power Multi-Hop Transmission)
+    // =========================================================================
+
+    fun blastInstantPacket(packet: MeshPacket) {
+        blastQueue.trySend(packet)
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun executeBlast(packet: MeshPacket) {
+        if (bluetoothAdapter?.isEnabled != true) return
+        val adv = advertiser ?: bluetoothAdapter.bluetoothLeAdvertiser ?: return
+
+        // 1. Extract payload bytes based on packet type
+        val payloadBytes = when (packet.payloadType) {
+            PayloadType.TEXT_MESSAGE -> {
+                try {
+                    val msgObj = gson.fromJson(packet.payload, TextMessagePayload::class.java)
+                    (msgObj.text ?: packet.payload).toByteArray(Charsets.UTF_8)
+                } catch (_: Exception) {
+                    packet.payload.toByteArray(Charsets.UTF_8)
+                }
+            }
+            PayloadType.PING -> "PING".toByteArray(Charsets.UTF_8)
+            PayloadType.PONG -> "PONG".toByteArray(Charsets.UTF_8)
+            else -> packet.payload.toByteArray(Charsets.UTF_8)
+        }
+
+        val maxChunk = 10
+        val totalFrames = if (payloadBytes.isEmpty()) 1 else ((payloadBytes.size + maxChunk - 1) / maxChunk).coerceIn(1, 15)
+
+        for (frameIdx in 0 until totalFrames) {
+            val start = frameIdx * maxChunk
+            val end = (start + maxChunk).coerceAtMost(payloadBytes.size)
+            val chunk = if (start < payloadBytes.size) payloadBytes.sliceArray(start until end) else ByteArray(0)
+
+            val frame = ByteArray(16 + chunk.size)
+            frame[0] = 0x9B.toByte() // Magic signature: NearbyMesh Instant Blaster
+            frame[1] = when (packet.payloadType) {
+                PayloadType.TEXT_MESSAGE -> 0x01.toByte()
+                PayloadType.MESSAGE_ACK -> 0x02.toByte()
+                PayloadType.EMERGENCY_SOS -> 0x03.toByte()
+                PayloadType.PING -> 0x04.toByte()
+                PayloadType.PONG -> 0x05.toByte()
+                PayloadType.PEER_ANNOUNCE -> 0x06.toByte()
+                else -> 0x01.toByte()
+            }
+            frame[2] = packet.ttl.coerceIn(0, 15).toByte()
+            frame[3] = packet.hopCount.coerceIn(0, 15).toByte()
+
+            val srcBytes = nodeIdToBytes(packet.sourceNodeId)
+            System.arraycopy(srcBytes, 0, frame, 4, 4)
+
+            val tgtBytes = nodeIdToBytes(packet.targetNodeId)
+            System.arraycopy(tgtBytes, 0, frame, 8, 4)
+
+            val seq = (packet.packetId.hashCode() and 0xFFFF)
+            frame[12] = ((seq shr 8) and 0xFF).toByte()
+            frame[13] = (seq and 0xFF).toByte()
+
+            frame[14] = (((frameIdx and 0x0F) shl 4) or (totalFrames and 0x0F)).toByte()
+            frame[15] = chunk.size.toByte()
+            if (chunk.isNotEmpty()) {
+                System.arraycopy(chunk, 0, frame, 16, chunk.size)
+            }
+
+            val blastData = AdvertiseData.Builder()
+                .setIncludeDeviceName(false)
+                .setIncludeTxPowerLevel(false)
+                .addManufacturerData(0xFE60, frame)
+                .build()
+
+            val blastSettings = AdvertiseSettings.Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .setConnectable(false)
+                .setTimeout(0)
+                .build()
+
+            val blastCallback = object : AdvertiseCallback() {
+                override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                    Log.d(TAG, "Instant Blast frame $frameIdx/$totalFrames sent (High Power, Low Latency)")
+                }
+                override fun onStartFailure(errorCode: Int) {
+                    Log.w(TAG, "Instant Blast frame $frameIdx failed: $errorCode")
+                }
+            }
+
+            try {
+                adv.startAdvertising(blastSettings, blastData, null, blastCallback)
+                delay(200L) // Broadcast ~10 advertisement frames
+                adv.stopAdvertising(blastCallback)
+            } catch (t: Throwable) {
+                Log.e(TAG, "Blast frame error: ${t.message}")
+            }
+            if (frameIdx < totalFrames - 1) {
+                delay(25L)
+            }
+        }
+    }
+
+    private fun handleInstantBlastData(data: ByteArray, rssi: Int) {
+        if (data.size < 16) return
+        if (data[0] != 0x9B.toByte()) return
+
+        val typeByte = data[1]
+        val payloadType = when (typeByte) {
+            0x01.toByte() -> PayloadType.TEXT_MESSAGE
+            0x02.toByte() -> PayloadType.MESSAGE_ACK
+            0x03.toByte() -> PayloadType.EMERGENCY_SOS
+            0x04.toByte() -> PayloadType.PING
+            0x05.toByte() -> PayloadType.PONG
+            0x06.toByte() -> PayloadType.PEER_ANNOUNCE
+            else -> PayloadType.TEXT_MESSAGE
+        }
+
+        val ttl = data[2].toInt() and 0xFF
+        val hopCount = data[3].toInt() and 0xFF
+        val srcNodeId = bytesToNodeId(data, 4)
+        val tgtNodeId = bytesToNodeId(data, 8)
+
+        val seqHigh = data[12].toInt() and 0xFF
+        val seqLow = data[13].toInt() and 0xFF
+        val packetSeq = (seqHigh shl 8) or seqLow
+
+        val frameHdr = data[14].toInt() and 0xFF
+        val frameIdx = (frameHdr shr 4) and 0x0F
+        val totalFrames = (frameHdr and 0x0F).coerceAtLeast(1)
+
+        val chunkLen = (data[15].toInt() and 0xFF).coerceAtMost(data.size - 16)
+        val chunk = if (chunkLen > 0) data.sliceArray(16 until 16 + chunkLen) else ByteArray(0)
+
+        val packetKey = "$srcNodeId-$packetSeq"
+
+        if (totalFrames <= 1) {
+            val payloadStr = String(chunk, Charsets.UTF_8)
+            val packet = MeshPacket(
+                packetId = "INSTANT-$packetKey",
+                sourceNodeId = srcNodeId,
+                senderNodeId = srcNodeId,
+                targetNodeId = tgtNodeId,
+                ttl = ttl,
+                hopCount = hopCount,
+                hopPath = mutableListOf(srcNodeId),
+                payloadType = payloadType,
+                payload = payloadStr,
+                isEncrypted = false
+            )
+            Log.d(TAG, "Instant Packet received via BLE Blaster: $srcNodeId -> $tgtNodeId, type=$payloadType, hops=$hopCount, RSSI=$rssi")
+            onInstantPacketReceived?.invoke(packet, rssi)
+        } else {
+            val frameArray = reassemblyCache.getOrPut(packetKey) { arrayOfNulls(totalFrames) }
+            if (frameIdx < frameArray.size) {
+                frameArray[frameIdx] = chunk
+            }
+            if (frameArray.all { it != null }) {
+                reassemblyCache.remove(packetKey)
+                val totalSize = frameArray.filterNotNull().sumOf { it.size }
+                val fullBytes = ByteArray(totalSize)
+                var offset = 0
+                for (f in frameArray.filterNotNull()) {
+                    System.arraycopy(f, 0, fullBytes, offset, f.size)
+                    offset += f.size
+                }
+                val fullPayload = String(fullBytes, Charsets.UTF_8)
+                val packet = MeshPacket(
+                    packetId = "INSTANT-$packetKey",
+                    sourceNodeId = srcNodeId,
+                    senderNodeId = srcNodeId,
+                    targetNodeId = tgtNodeId,
+                    ttl = ttl,
+                    hopCount = hopCount,
+                    hopPath = mutableListOf(srcNodeId),
+                    payloadType = payloadType,
+                    payload = fullPayload,
+                    isEncrypted = false
+                )
+                Log.d(TAG, "Reassembled multi-frame Instant Packet: $srcNodeId -> $tgtNodeId ($totalFrames frames), RSSI=$rssi")
+                onInstantPacketReceived?.invoke(packet, rssi)
+            }
+        }
+    }
+
+    private fun nodeIdToBytes(nodeId: String): ByteArray {
+        val clean = nodeId.replace("-", "").trim().uppercase()
+        val bytes = ByteArray(4)
+        if (clean == "BROADCAST" || clean == "MESH-BROADCAST" || clean == "ALL" || nodeId == MeshPacket.BROADCAST_ID) {
+            bytes.fill(0xFF.toByte())
+            return bytes
+        }
+        try {
+            if (clean.length >= 8) {
+                for (i in 0 until 4) {
+                    val hexByte = clean.substring(i * 2, i * 2 + 2)
+                    bytes[i] = hexByte.toInt(16).toByte()
+                }
+                return bytes
+            }
+        } catch (_: Exception) {}
+        val ascii = clean.padEnd(4, '0').take(4).toByteArray(Charsets.US_ASCII)
+        System.arraycopy(ascii, 0, bytes, 0, 4)
+        return bytes
+    }
+
+    private fun bytesToNodeId(bytes: ByteArray, offset: Int): String {
+        val b0 = bytes[offset].toInt() and 0xFF
+        val b1 = bytes[offset + 1].toInt() and 0xFF
+        val b2 = bytes[offset + 2].toInt() and 0xFF
+        val b3 = bytes[offset + 3].toInt() and 0xFF
+        if (b0 == 0xFF && b1 == 0xFF && b2 == 0xFF && b3 == 0xFF) {
+            return MeshPacket.BROADCAST_ID
+        }
+        return "%02X%02X-%02X%02X".format(b0, b1, b2, b3)
     }
 }

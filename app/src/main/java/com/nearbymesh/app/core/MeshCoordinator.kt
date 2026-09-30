@@ -482,6 +482,11 @@ class MeshCoordinator(private val context: Context) {
             }
         }
 
+        // Wire Connectionless Instant BLE Blaster (<50ms delivery)
+        bleManager.onInstantPacketReceived = { packet, rssi ->
+            meshRouter.processIncomingPacket(packet, "BLE_INSTANT", rssi)
+        }
+
         // Collect BLE discovered devices into MeshPeer list
         scope.launch {
             bleManager.discoveredDevices.collect { bleDevices ->
@@ -571,6 +576,15 @@ class MeshCoordinator(private val context: Context) {
                 bleGattManager.connectToDevice(packet.targetNodeId, peer.bluetoothDevice)
                 bluetoothRfcommManager.connectToDevice(peer.bluetoothDevice)
             }
+        }
+
+        // 0. Connectionless Instant BLE Blaster (<50ms delivery for Text, ACKs, SOS, PING)
+        if (packet.payloadType == PayloadType.TEXT_MESSAGE ||
+            packet.payloadType == PayloadType.MESSAGE_ACK ||
+            packet.payloadType == PayloadType.EMERGENCY_SOS ||
+            packet.payloadType == PayloadType.PING ||
+            packet.payloadType == PayloadType.PONG) {
+            bleManager.blastInstantPacket(packet)
         }
 
         // 1. Send via BLE GATT (Zero-pairing primary channel: works immediately between any 2 Android phones)

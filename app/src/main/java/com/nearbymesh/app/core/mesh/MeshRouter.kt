@@ -1,14 +1,15 @@
 package com.nearbymesh.app.core.mesh
 
 import android.util.Log
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
 /**
- * Core Multi-Hop Mesh Router.
- * Handles packet validation, loop prevention, deduplication, TTL decrement,
- * hop-path propagation, and forwarding across physical (Wi-Fi P2P / BLE) and simulated links.
+ * Core Multi-Hop Mesh Router with Smart RSSI-Weighted Directed Forwarding.
+ * Prioritizes long-range edge nodes for instantaneous forwarding (<15ms)
+ * while delaying close nodes (200ms) to prevent radio storms and maximize hop distance.
  */
 class MeshRouter(
     val myNodeId: String,
@@ -19,6 +20,8 @@ class MeshRouter(
     companion object {
         private const val TAG = "MeshRouter"
     }
+
+    private val routerScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     private val _deliveredPackets = MutableSharedFlow<MeshPacket>(extraBufferCapacity = 64)
     val deliveredPackets: SharedFlow<MeshPacket> = _deliveredPackets.asSharedFlow()
@@ -36,10 +39,15 @@ class MeshRouter(
     var isRelayEnabled: Boolean = true
 
     /**
-     * Ingests an incoming packet from any transport link (Wi-Fi, BLE, or Simulator).
+     * Ingests an incoming packet from any transport link (BLE Instant Blaster, BLE GATT, Wi-Fi, or RFCOMM).
+     * Includes sender RSSI for Smart Directed Forwarding.
      */
-    fun processIncomingPacket(packet: MeshPacket, receivedInterface: String = "WIRELESS") {
-        Log.d(TAG, "Incoming packet ${packet.packetId} from ${packet.sourceNodeId} (via ${packet.senderNodeId}) to ${packet.targetNodeId}, type=${packet.payloadType}, TTL=${packet.ttl}, Hops=${packet.hopCount}")
+    fun processIncomingPacket(
+        packet: MeshPacket,
+        receivedInterface: String = "WIRELESS",
+        senderRssi: Int = -60
+    ) {
+        Log.d(TAG, "Incoming packet ${packet.packetId} from ${packet.sourceNodeId} (via ${packet.senderNodeId}) to ${packet.targetNodeId}, type=${packet.payloadType}, TTL=${packet.ttl}, Hops=${packet.hopCount}, RSSI=$senderRssi on $receivedInterface")
 
         // 1. Deduplication check: drop if already seen to prevent loops/storms
         if (seenCache.isDuplicateAndMark(packet.packetId)) {
@@ -57,18 +65,26 @@ class MeshRouter(
             Log.d(TAG, "Packet ${packet.packetId} delivered to local node $myNodeId (hops=${packet.hopCount})")
         }
 
-        // 3. Multi-hop relay forwarding
-        // If it's broadcast or destined for another node, forward if TTL > 1 and relaying is enabled
-        if (isRelayEnabled && !isForMe && packet.ttl > 1) {
-            val forwardPacket = packet.createForwardPacket(myNodeId)
-            Log.d(TAG, "Forwarding packet ${packet.packetId} towards ${packet.targetNodeId} via hop #${forwardPacket.hopCount} (new TTL=${forwardPacket.ttl})")
-            _relayedPackets.tryEmit(forwardPacket)
-            outboundDispatcher?.invoke(forwardPacket, packet.senderNodeId)
-        } else if (isRelayEnabled && isBroadcast && packet.ttl > 1) {
-            val forwardPacket = packet.createForwardPacket(myNodeId)
-            Log.d(TAG, "Flooding broadcast packet ${packet.packetId} via hop #${forwardPacket.hopCount}")
-            _relayedPackets.tryEmit(forwardPacket)
-            outboundDispatcher?.invoke(forwardPacket, packet.senderNodeId)
+        // 3. Smart RSSI-Weighted Multi-Hop Forwarding
+        // Far nodes (RSSI < -75 dBm) jump immediately (15ms delay) to maximize coverage.
+        // Close nodes (RSSI > -65 dBm) wait 200ms to avoid air collisions.
+        if (isRelayEnabled && (!isForMe || isBroadcast) && packet.ttl > 1) {
+            val forwardDelayMs: Long = when {
+                senderRssi < -78 -> 15L   // Far edge: forward immediately!
+                senderRssi < -65 -> 80L   // Mid-range: short backoff
+                else -> 200L              // Close node: backoff, yield to farther nodes
+            }
+
+            routerScope.launch {
+                if (forwardDelayMs > 0) {
+                    delay(forwardDelayMs)
+                }
+
+                val forwardPacket = packet.createForwardPacket(myNodeId)
+                Log.d(TAG, "Smart RSSI Forwarding packet ${packet.packetId} towards ${packet.targetNodeId} via hop #${forwardPacket.hopCount} (delay=${forwardDelayMs}ms, RSSI=$senderRssi, new TTL=${forwardPacket.ttl})")
+                _relayedPackets.tryEmit(forwardPacket)
+                outboundDispatcher?.invoke(forwardPacket, packet.senderNodeId)
+            }
         } else if (packet.ttl <= 1 && !isForMe) {
             Log.w(TAG, "Packet ${packet.packetId} dropped: TTL expired (${packet.ttl})")
             _droppedPackets.tryEmit(packet.packetId)
