@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import com.nearbymesh.app.core.MeshCoordinator
 import com.nearbymesh.app.core.MeshPeer
 import com.nearbymesh.app.core.models.UserProfile
+import com.nearbymesh.app.ui.theme.*
 import com.nearbymesh.app.service.NotificationHelper
 import com.nearbymesh.app.ui.theme.AppThemeMode
 import com.nearbymesh.app.ui.theme.bouncyClickable
@@ -161,6 +162,8 @@ fun SettingsScreen(
         }
     }
 
+    var showAvatarPicker by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -202,14 +205,14 @@ fun SettingsScreen(
                     currentTheme = currentTheme,
                     colors = colors,
                     onNavigate = { activeSubScreen = it },
-                    onPickPhoto = { photoPickerLauncher.launch("image/*") }
+                    onPickPhoto = { showAvatarPicker = true }
                 )
                 SettingsSubScreen.PROFILE_EDIT -> ProfileEditSubScreen(
                     coordinator = coordinator,
                     userProfile = userProfile,
                     profileBitmap = profileBitmap,
                     colors = colors,
-                    onPickPhoto = { photoPickerLauncher.launch("image/*") },
+                    onPickPhoto = { showAvatarPicker = true },
                     onDone = { activeSubScreen = SettingsSubScreen.MAIN }
                 )
                 SettingsSubScreen.NEARBY_DISCOVERY -> NearbyDiscoverySubScreen(coordinator, colors)
@@ -229,6 +232,16 @@ fun SettingsScreen(
                 SettingsSubScreen.ABOUT -> AboutSubScreen(colors)
             }
         }
+    }
+
+    if (showAvatarPicker) {
+        AvatarPickerSheet(
+            selectedId = userProfile.avatarId,
+            onSelectAvatar = { newId ->
+                coordinator.updateAvatarId(newId)
+            },
+            onDismiss = { showAvatarPicker = false }
+        )
     }
 }
 
@@ -295,112 +308,17 @@ private fun SettingsTopBar(
  */
 @Composable
 fun FoxProfileAvatar(
-    bitmap: androidx.compose.ui.graphics.ImageBitmap?,
+    bitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
+    avatarId: Int = 1,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(
-                Brush.radialGradient(
-                    listOf(Color(0xFFFB923C), Color(0xFFEA580C))
-                )
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = "Avatar",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop
-            )
-        } else {
-            androidx.compose.foundation.Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(5.dp)
-            ) {
-                val w = size.width
-                val h = size.height
-
-                // White cheeks / muzzle mask
-                val cheekPath = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(w * 0.15f, h * 0.52f)
-                    quadraticBezierTo(w * 0.5f, h * 0.65f, w * 0.85f, h * 0.52f)
-                    quadraticBezierTo(w * 0.95f, h * 0.78f, w * 0.5f, h * 0.92f)
-                    quadraticBezierTo(w * 0.05f, h * 0.78f, w * 0.15f, h * 0.52f)
-                    close()
-                }
-                drawPath(cheekPath, color = Color.White)
-
-                // Dark tips on ears
-                val leftEarTip = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(w * 0.22f, h * 0.32f)
-                    lineTo(w * 0.28f, h * 0.10f)
-                    lineTo(w * 0.42f, h * 0.22f)
-                    close()
-                }
-                drawPath(leftEarTip, color = Color(0xFF1E293B))
-
-                val rightEarTip = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(w * 0.78f, h * 0.32f)
-                    lineTo(w * 0.72f, h * 0.10f)
-                    lineTo(w * 0.58f, h * 0.22f)
-                    close()
-                }
-                drawPath(rightEarTip, color = Color(0xFF1E293B))
-
-                // Inner white ear triangles
-                val leftEarInner = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(w * 0.26f, h * 0.30f)
-                    lineTo(w * 0.30f, h * 0.16f)
-                    lineTo(w * 0.40f, h * 0.24f)
-                    close()
-                }
-                drawPath(leftEarInner, color = Color(0xFFFFFBEB))
-
-                val rightEarInner = androidx.compose.ui.graphics.Path().apply {
-                    moveTo(w * 0.74f, h * 0.30f)
-                    lineTo(w * 0.70f, h * 0.16f)
-                    lineTo(w * 0.60f, h * 0.24f)
-                    close()
-                }
-                drawPath(rightEarInner, color = Color(0xFFFFFBEB))
-
-                // Left Eye (Black with gleam)
-                drawCircle(
-                    color = Color(0xFF0F172A),
-                    radius = w * 0.065f,
-                    center = androidx.compose.ui.geometry.Offset(w * 0.36f, h * 0.54f)
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = w * 0.02f,
-                    center = androidx.compose.ui.geometry.Offset(w * 0.345f, h * 0.525f)
-                )
-
-                // Right Eye (Black with gleam)
-                drawCircle(
-                    color = Color(0xFF0F172A),
-                    radius = w * 0.065f,
-                    center = androidx.compose.ui.geometry.Offset(w * 0.64f, h * 0.54f)
-                )
-                drawCircle(
-                    color = Color.White,
-                    radius = w * 0.02f,
-                    center = androidx.compose.ui.geometry.Offset(w * 0.625f, h * 0.525f)
-                )
-
-                // Black nose oval
-                drawOval(
-                    color = Color(0xFF0F172A),
-                    topLeft = androidx.compose.ui.geometry.Offset(w * 0.44f, h * 0.68f),
-                    size = androidx.compose.ui.geometry.Size(w * 0.12f, h * 0.08f)
-                )
-            }
-        }
-    }
+    AvatarBubble(
+        avatarId = if (avatarId in 1..20) avatarId else 1,
+        modifier = modifier,
+        size = 62.dp,
+        showBorder = true,
+        borderColor = Color(0x33FFFFFF)
+    )
 }
 
 /**
@@ -600,6 +518,7 @@ private fun SettingsMainList(
                         Box(modifier = Modifier.size(62.dp)) {
                             FoxProfileAvatar(
                                 bitmap = profileBitmap,
+                                avatarId = userProfile.avatarId,
                                 modifier = Modifier.fillMaxSize()
                             )
 
@@ -2135,26 +2054,21 @@ private fun ProfileEditSubScreen(
             modifier = Modifier
                 .size(96.dp)
                 .clip(CircleShape)
-                .background(if (colors.isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0))
-                .border(2.dp, colors.iconTint, CircleShape)
                 .bouncyClickable(scaleDown = 0.90f) { onPickPhoto() },
             contentAlignment = Alignment.Center
         ) {
-            if (profileBitmap != null) {
-                Image(
-                    bitmap = profileBitmap,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                )
-            } else {
-                Text(text = editName.take(1).uppercase(), color = colors.textPrimary, fontSize = 36.sp, fontWeight = FontWeight.Bold)
-            }
+            AvatarBubble(
+                avatarId = userProfile.avatarId,
+                size = 96.dp,
+                showBorder = true,
+                borderColor = Color(0xFF38BDF8),
+                borderWidth = 2.dp
+            )
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(10.dp))
         TextButton(onClick = onPickPhoto) {
-            Text(text = "Change Photo", color = colors.iconTint, fontWeight = FontWeight.Bold)
+            Text(text = "Change Avatar (20 Built-in)", color = colors.iconTint, fontWeight = FontWeight.Bold)
         }
 
         Spacer(modifier = Modifier.height(20.dp))
