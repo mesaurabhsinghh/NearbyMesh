@@ -116,4 +116,14 @@ Install via ADB:
 ```powershell
 $env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe install -r "c:\NearbyMesh\app\build\outputs\apk\debug\app-debug.apk"
 ```
->>>>>>> 268c4ce (Initial commit: NearbyMesh - Zero-Internet P2P & Multi-Hop Decentralized Mesh App)
+
+---
+
+## ⚖️ Author, Intellectual Property & Copyright Notice
+
+- **Creator & Lead Architect**: **Saurabh Singh** ([@mesaurabhsinghh](https://github.com/mesaurabhsinghh))
+- **Email**: `sk8002750663@gmail.com`
+- **GitHub**: [https://github.com/mesaurabhsinghh/NearbyMesh](https://github.com/mesaurabhsinghh/NearbyMesh)
+
+> **PROPRIETARY & ALL RIGHTS RESERVED**:  
+> Copyright © 2026 Saurabh Singh. This repository, its underlying mesh protocols, radio algorithms, and source code are the exclusive intellectual property of **Saurabh Singh**. Unauthorized copying, cloning, rebranding, claiming authorship, or republishing to app stores without written authorization is strictly prohibited and subject to DMCA takedown and statutory legal enforcement.
