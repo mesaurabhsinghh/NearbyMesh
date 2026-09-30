@@ -38,6 +38,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Enable true Edge-to-Edge with fluid insets handling
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+
         coordinator = MeshCoordinator.getInstance(applicationContext)
         handleNotificationIntent(intent)
 

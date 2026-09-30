@@ -55,6 +55,8 @@ fun EmergencyScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(backgroundColor)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

@@ -1,9 +1,14 @@
 package com.nearbymesh.app.ui.theme
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 // Brand Colors from Design Reference
 val BrandEmerald = Color(0xFF00C853)
@@ -111,6 +116,23 @@ fun NearbyMeshTheme(
     }
 
     val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
+
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? Activity)?.window ?: return@SideEffect
+            val insetsController = WindowCompat.getInsetsController(window, view)
+
+            // Transparent system bars: UI smoothly flows behind them without awkward blank white bands
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+
+            // Light mode: status bar icons & nav bar back button must be DARK (black) so they are 100% visible on light bg!
+            // Dark mode: status bar icons & nav bar back button must be LIGHT (white) so they are 100% visible on dark bg!
+            insetsController.isAppearanceLightStatusBars = !isDark
+            insetsController.isAppearanceLightNavigationBars = !isDark
+        }
+    }
 
     MaterialTheme(
         colorScheme = colorScheme,

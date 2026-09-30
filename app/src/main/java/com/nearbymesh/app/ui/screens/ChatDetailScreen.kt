@@ -219,11 +219,12 @@ fun ChatDetailScreen(
                 else Brush.verticalGradient(listOf(Color(0xFFCBD5E1), Color(0xFFE2E8F0)))
             ),
             shadowElevation = if (isDark) 14.dp else 2.dp,
-            modifier = Modifier.fillMaxWidth().statusBarsPadding()
+            modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -467,13 +468,18 @@ fun ChatDetailScreen(
 
         // 3. Bottom Input Bar (Matching Picture 3 Frosted Glassmorphism)
         Surface(
-            color = Color(0xE613131A),
-            border = BorderStroke(0.5.dp, Brush.verticalGradient(listOf(Color(0x35FFFFFF), Color(0x08FFFFFF)))),
-            modifier = Modifier.fillMaxWidth().navigationBarsPadding()
+            color = if (isDark) Color(0xE613131A) else Color(0xF8FFFFFF),
+            border = BorderStroke(
+                0.5.dp,
+                if (isDark) Brush.verticalGradient(listOf(Color(0x35FFFFFF), Color(0x08FFFFFF)))
+                else Brush.verticalGradient(listOf(Color(0xFFCBD5E1), Color(0xFFE2E8F0)))
+            ),
+            modifier = Modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
