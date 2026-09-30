@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="mesh_dark_bg">#0D1117</color>
+    <color name="mesh_light_bg">#F7F9FB</color>
+    <color name="mesh_light_surface">#FFFFFF</color>
+    <color name="mesh_surface">#161B22</color>
+    <color name="mesh_neon_green">#00E676</color>
+    <color name="mesh_cyan">#00E5FF</color>
+    <color name="mesh_amber">#FFD600</color>
+    <color name="mesh_emergency_red">#FF1744</color>
+    <color name="mesh_text_primary">#F0F6FC</color>
+    <color name="mesh_text_secondary">#8B949E</color>
+</resources>

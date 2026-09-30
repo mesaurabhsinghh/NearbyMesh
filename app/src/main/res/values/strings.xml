@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">NearbyMesh</string>
+    <string name="mesh_status_active">Mesh Active</string>
+    <string name="mesh_status_inactive">Mesh Inactive</string>
+    <string name="foreground_service_title">NearbyMesh Node Running</string>
+    <string name="foreground_service_desc">Relaying offline mesh packets &amp; maintaining peer connections</string>
+</resources>
